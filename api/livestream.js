@@ -6,8 +6,6 @@ const API_KEY = process.env.YT_API_KEY;
 const CHANNEL_ID = process.env.YT_CHANNEL_ID;
 
 function setCors(res) {
-  // Allow any site (including ChurchPlantMedia) to read this JSON.
-  // This endpoint returns only public data (state + videoId + start time).
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -71,13 +69,11 @@ async function pickSoonestUpcoming(limit = 10) {
 }
 
 module.exports = async (req, res) => {
-  // ✅ Handle CORS preflight
+  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     setCors(res);
     return res.status(204).end();
   }
-
-  const debug = req.query && String(req.query.debug || "") === "1";
 
   try {
     if (!API_KEY || !CHANNEL_ID) {
@@ -88,7 +84,12 @@ module.exports = async (req, res) => {
     const live = await ytSearch("live", 1);
     if (live.items && live.items.length) {
       const videoId = live.items[0].id.videoId;
-      return json(res, 200, { state: "live", videoId, upcomingStartMs: null }, 30);
+      return json(
+        res,
+        200,
+        { state: "live", videoId, upcomingStartMs: null },
+        60 // ⬅ bumped from 30s → 60s
+      );
     }
 
     // 2) Upcoming
@@ -96,9 +97,9 @@ module.exports = async (req, res) => {
     if (soonest && soonest.id) {
       const diff = soonest.t - Date.now();
       const cacheSeconds =
-        diff > 2 * 60 * 60 * 1000 ? 1800 :
-        diff > 30 * 60 * 1000 ? 300 :
-        30;
+        diff > 2 * 60 * 60 * 1000 ? 1800 : // >2h → 30 min
+        diff > 30 * 60 * 1000 ? 300  :    // 30–120m → 5 min
+        60;                               // <30m → ⬅ bumped from 30s → 60s
 
       return json(
         res,
@@ -112,23 +113,28 @@ module.exports = async (req, res) => {
     const completed = await ytSearch("completed", 1);
     if (completed.items && completed.items.length) {
       const videoId = completed.items[0].id.videoId;
-      return json(res, 200, { state: "replay", videoId, upcomingStartMs: null }, 600);
+      return json(
+        res,
+        200,
+        { state: "replay", videoId, upcomingStartMs: null },
+        600
+      );
     }
 
-    return json(res, 200, { state: "none", videoId: null, upcomingStartMs: null }, 600);
+    return json(
+      res,
+      200,
+      { state: "none", videoId: null, upcomingStartMs: null },
+      600
+    );
 
   } catch (e) {
-    if (debug) {
-      setCors(res);
-      res.setHeader("Cache-Control", "no-store");
-      return res.status(200).json({
-        state: "none",
-        videoId: null,
-        upcomingStartMs: null,
-        debugError: String(e && e.message ? e.message : e)
-      });
-    }
-
-    return json(res, 200, { state: "none", videoId: null, upcomingStartMs: null }, 600);
+    return json(
+      res,
+      200,
+      { state: "none", videoId: null, upcomingStartMs: null },
+      600
+    );
   }
 };
+
