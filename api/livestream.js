@@ -143,7 +143,7 @@ module.exports = async (req, res) => {
       const cacheSeconds =
         diff > 2 * 60 * 60 * 1000 ? 1800 : // >2h → 30 min
         diff > 30 * 60 * 1000 ? 300  :    // 30–120m → 5 min
-        60;                               // <30m → 60s
+        20;                               // <30m → 20s
 
       return json(res, 200, result, cacheSeconds);
     }
