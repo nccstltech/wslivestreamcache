@@ -102,6 +102,20 @@ module.exports = async (req, res) => {
 
     return json(res, 200, { state: "none", videoId: null, upcomingStartMs: null }, 600);
   } catch (e) {
-    return json(res, 200, { state: "none", videoId: null, upcomingStartMs: null }, 60);
+  const debug = req.query && String(req.query.debug || "") === "1";
+  if (debug) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      state: "none",
+      videoId: null,
+      upcomingStartMs: null,
+      debugError: String(e && e.message ? e.message : e),
+      hasKey: Boolean(API_KEY),
+      hasChannel: Boolean(CHANNEL_ID)
+    });
   }
+
+  return json(res, 200, { state: "none", videoId: null, upcomingStartMs: null }, 600);
+}
+
 };
