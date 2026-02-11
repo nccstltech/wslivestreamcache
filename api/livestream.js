@@ -150,7 +150,7 @@ module.exports = async (req, res) => {
 
     // Live can be checked frequently; replay/none can be longer.
     const cacheSeconds =
-      result.state === "live" ? 60 :
+      result.state === "live" ? 20 :
       result.state === "replay" ? 600 :
       600;
 
