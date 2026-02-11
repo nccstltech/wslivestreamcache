@@ -71,7 +71,7 @@ module.exports = async (req, res) => {
     const live = await ytSearch("live", 1);
     if (live.items && live.items.length) {
       const videoId = live.items[0].id.videoId;
-      return json(res, 200, { state: "live", videoId, upcomingStartMs: null }, 20);
+      return json(res, 200, { state: "live", videoId, upcomingStartMs: null }, 60);
     }
 
     // 2) Upcoming
@@ -83,7 +83,7 @@ module.exports = async (req, res) => {
       const cacheSeconds =
         diff > 2 * 60 * 60 * 1000 ? 1800 :
         diff > 30 * 60 * 1000 ? 300 :
-        20;
+        60;
 
       return json(
         res,
