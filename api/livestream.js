@@ -1,5 +1,5 @@
 // Vercel Serverless Function: /api/livestream
-// Returns { state, videoId, upcomingStartMs }
+// Returns { state, videoId, upcomingStartMs, generatedAt, youtubeFetchedAt }
 // Refactor: avoids YouTube search.list (expensive) by using:
 // channels.list -> uploads playlistId, playlistItems.list -> recent videoIds, videos.list -> liveStreamingDetails
 
@@ -15,6 +15,7 @@ function setCors(res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
+// Adds caching headers + CORS, and returns JSON
 function json(res, status, body, cacheSeconds) {
   setCors(res);
   res.setHeader(
@@ -122,15 +123,30 @@ module.exports = async (req, res) => {
     return res.status(204).end();
   }
 
+  // We'll stamp the response so you can tell how "fresh" it is
+  const generatedAt = new Date().toISOString();
+
   try {
     if (!API_KEY || !CHANNEL_ID) {
-      return json(res, 500, { error: "Missing env vars" }, 60);
+      return json(
+        res,
+        500,
+        { error: "Missing env vars", state: "none", videoId: null, upcomingStartMs: null, generatedAt, youtubeFetchedAt: null },
+        60
+      );
     }
 
     // Fetch the most recent uploads (20 as discussed)
     const ids = await listRecentUploadVideoIds(20);
+    const youtubeFetchedAt = new Date().toISOString();
+
     if (!ids.length) {
-      return json(res, 200, { state: "none", videoId: null, upcomingStartMs: null }, 600);
+      return json(
+        res,
+        200,
+        { state: "none", videoId: null, upcomingStartMs: null, generatedAt, youtubeFetchedAt },
+        600
+      );
     }
 
     // Get live streaming details for those uploads
@@ -145,7 +161,12 @@ module.exports = async (req, res) => {
         diff > 30 * 60 * 1000 ? 300  :    // 30–120m → 5 min
         20;                               // <30m → 20s
 
-      return json(res, 200, result, cacheSeconds);
+      return json(
+        res,
+        200,
+        { ...result, generatedAt, youtubeFetchedAt },
+        cacheSeconds
+      );
     }
 
     // Live can be checked frequently; replay/none can be longer.
@@ -154,11 +175,21 @@ module.exports = async (req, res) => {
       result.state === "replay" ? 600 :
       600;
 
-    return json(res, 200, result, cacheSeconds);
+    return json(
+      res,
+      200,
+      { ...result, generatedAt, youtubeFetchedAt },
+      cacheSeconds
+    );
 
   } catch (e) {
     // Fail "closed" (no stream) but cache a bit so you don't hot-loop errors
-    return json(res, 200, { state: "none", videoId: null, upcomingStartMs: null }, 600);
+    return json(
+      res,
+      200,
+      { state: "none", videoId: null, upcomingStartMs: null, generatedAt, youtubeFetchedAt: null },
+      600
+    );
   }
 };
 
