@@ -2,9 +2,20 @@
 // Returns { state, videoId, upcomingStartMs, generatedAt, youtubeFetchedAt }
 // Refactor: avoids YouTube search.list (expensive) by using:
 // channels.list -> uploads playlistId, playlistItems.list -> recent videoIds, videos.list -> liveStreamingDetails
+//
+// Late-start fix (grace window):
+// If a stream is scheduled to start at X but actually goes live a few minutes late,
+// YouTube may not set actualStartTime immediately. Without a grace window, the code
+// can incorrectly skip to the next upcoming event right after X.
+// We treat "scheduledStartTime <= now <= scheduledStartTime + GRACE_MS" as still upcoming.
 
 const API_KEY = process.env.YT_API_KEY;
 const CHANNEL_ID = process.env.YT_CHANNEL_ID;
+
+// Grace window for late starts (default: 10 minutes)
+// You can override with env var YT_LATE_START_GRACE_MINUTES
+const GRACE_MINUTES = Number(process.env.YT_LATE_START_GRACE_MINUTES || "10");
+const GRACE_MS = Math.max(0, GRACE_MINUTES) * 60 * 1000;
 
 // Cache uploads playlist ID across warm invocations (best-effort)
 let cachedUploadsPlaylistId = null;
@@ -90,16 +101,37 @@ function pickStateFromVideos(videos) {
   });
   if (liveNow) return { state: "live", videoId: liveNow.id, upcomingStartMs: null };
 
-  // 2) Soonest upcoming: scheduledStartTime in the future
-  const upcoming = videos
-    .map((v) => ({
-      id: v.id,
-      t: Date.parse(v.liveStreamingDetails?.scheduledStartTime || ""),
-    }))
-    .filter((x) => Number.isFinite(x.t) && x.t > now)
+  // Build candidates with a scheduledStartTime (parseable)
+  const scheduled = videos
+    .map((v) => {
+      const d = v.liveStreamingDetails;
+      const t = Date.parse(d?.scheduledStartTime || "");
+      return {
+        id: v.id,
+        t,
+        hasActualStart: Boolean(d?.actualStartTime),
+        hasActualEnd: Boolean(d?.actualEndTime),
+      };
+    })
+    .filter((x) => Number.isFinite(x.t));
+
+  // 2) Soonest upcoming in the future
+  const upcomingFuture = scheduled
+    .filter((x) => !x.hasActualEnd && x.t > now)
     .sort((a, b) => a.t - b.t)[0];
 
-  if (upcoming) return { state: "upcoming", videoId: upcoming.id, upcomingStartMs: upcoming.t };
+  // 2b) Late-start grace: scheduled time has passed, but within GRACE_MS,
+  // and it's not ended and has not started (no actualStartTime yet).
+  const upcomingGrace = scheduled
+    .filter((x) => !x.hasActualEnd && !x.hasActualStart && x.t <= now && (now - x.t) <= GRACE_MS)
+    .sort((a, b) => b.t - a.t)[0]; // prefer the most recent scheduled start
+
+  // Prefer grace-window candidate over a far-future event (prevents skipping)
+  const upcomingPick = upcomingGrace || upcomingFuture;
+
+  if (upcomingPick) {
+    return { state: "upcoming", videoId: upcomingPick.id, upcomingStartMs: upcomingPick.t };
+  }
 
   // 3) Replay: most recent completed livestream (actualEndTime exists)
   const completed = videos
@@ -153,9 +185,21 @@ module.exports = async (req, res) => {
     const videos = await getLiveStreamingDetails(ids);
     const result = pickStateFromVideos(videos);
 
-    // Keep your smart caching strategy for upcoming streams
+    // Keep your smart caching strategy for upcoming streams (with late-start handling)
     if (result.state === "upcoming" && result.upcomingStartMs) {
-      const diff = result.upcomingStartMs - Date.now();
+      const diff = result.upcomingStartMs - Date.now(); // can be negative during grace window
+      const absLate = diff < 0 ? Math.abs(diff) : 0;
+
+      // If we're in the grace window (scheduled time just passed), poll very frequently
+      if (diff <= 0 && absLate <= GRACE_MS) {
+        return json(
+          res,
+          200,
+          { ...result, generatedAt, youtubeFetchedAt },
+          5 // 5s cache during sensitive transition
+        );
+      }
+
       const cacheSeconds =
         diff > 2 * 60 * 60 * 1000 ? 1800 : // >2h → 30 min
         diff > 30 * 60 * 1000 ? 300  :    // 30–120m → 5 min
@@ -171,7 +215,7 @@ module.exports = async (req, res) => {
 
     // Live can be checked frequently; replay/none can be longer.
     const cacheSeconds =
-      result.state === "live" ? 20 :
+      result.state === "live" ? 10 :   // slightly tighter so it flips quickly at start/end
       result.state === "replay" ? 600 :
       600;
 
@@ -192,4 +236,3 @@ module.exports = async (req, res) => {
     );
   }
 };
-
