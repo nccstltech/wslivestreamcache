@@ -190,20 +190,20 @@ module.exports = async (req, res) => {
       const diff = result.upcomingStartMs - Date.now(); // can be negative during grace window
       const absLate = diff < 0 ? Math.abs(diff) : 0;
 
-      // If we're in the grace window (scheduled time just passed), poll very frequently
+      // If we're in the grace window (scheduled time just passed), poll frequently (but not crazy)
       if (diff <= 0 && absLate <= GRACE_MS) {
         return json(
           res,
           200,
           { ...result, generatedAt, youtubeFetchedAt },
-          5 // 5s cache during sensitive transition
+          30 // was 5s
         );
       }
 
       const cacheSeconds =
         diff > 2 * 60 * 60 * 1000 ? 1800 : // >2h → 30 min
         diff > 30 * 60 * 1000 ? 300  :    // 30–120m → 5 min
-        20;                               // <30m → 20s
+        60;                               // <30m → was 20s
 
       return json(
         res,
@@ -215,7 +215,7 @@ module.exports = async (req, res) => {
 
     // Live can be checked frequently; replay/none can be longer.
     const cacheSeconds =
-      result.state === "live" ? 10 :   // slightly tighter so it flips quickly at start/end
+      result.state === "live" ? 60 :   // was 10
       result.state === "replay" ? 600 :
       600;
 
