@@ -61,7 +61,7 @@ async function getUploadsPlaylistId() {
   return uploads;
 }
 
-async function listRecentUploadVideoIds(maxResults = 20) {
+async function listRecentUploadVideoIds(maxResults = 50) {
   const uploadsPlaylistId = await getUploadsPlaylistId();
 
   const url =
@@ -168,8 +168,8 @@ module.exports = async (req, res) => {
       );
     }
 
-    // Fetch the most recent uploads (20 as discussed)
-    const ids = await listRecentUploadVideoIds(20);
+    // Fetch the most recent uploads (50 for safety margin)
+    const ids = await listRecentUploadVideoIds(50);
     const youtubeFetchedAt = new Date().toISOString();
 
     if (!ids.length) {
@@ -185,25 +185,23 @@ module.exports = async (req, res) => {
     const videos = await getLiveStreamingDetails(ids);
     const result = pickStateFromVideos(videos);
 
-    // Keep your smart caching strategy for upcoming streams (with late-start handling)
     if (result.state === "upcoming" && result.upcomingStartMs) {
       const diff = result.upcomingStartMs - Date.now(); // can be negative during grace window
-      const absLate = diff < 0 ? Math.abs(diff) : 0;
 
-      // If we're in the grace window (scheduled time just passed), poll frequently (but not crazy)
-      if (diff <= 0 && absLate <= GRACE_MS) {
+      // If we're in the grace window (scheduled time just passed), poll frequently
+      if (diff <= 0 && Math.abs(diff) <= GRACE_MS) {
         return json(
           res,
           200,
           { ...result, generatedAt, youtubeFetchedAt },
-          30 // was 5s
+          30 // 30s cache during sensitive late-start transition
         );
       }
 
       const cacheSeconds =
-        diff > 2 * 60 * 60 * 1000 ? 1800 : // >2h → 30 min
-        diff > 30 * 60 * 1000 ? 300  :    // 30–120m → 5 min
-        60;                               // <30m → was 20s
+        diff > 2 * 60 * 60 * 1000 ? 1800 : // >2h away → 30 min
+        diff > 30 * 60 * 1000      ? 300  : // 30–120m away → 5 min
+        60;                                  // <30m away → 60s
 
       return json(
         res,
@@ -213,9 +211,9 @@ module.exports = async (req, res) => {
       );
     }
 
-    // Live can be checked frequently; replay/none can be longer.
+    // Live can be checked frequently; replay/none can be longer
     const cacheSeconds =
-      result.state === "live" ? 60 :   // was 10
+      result.state === "live"   ? 10  :
       result.state === "replay" ? 600 :
       600;
 
@@ -227,12 +225,15 @@ module.exports = async (req, res) => {
     );
 
   } catch (e) {
+    // Log error for Vercel function diagnostics
+    console.error("[livestream] Error fetching YouTube data:", e);
+
     // Fail "closed" (no stream) but cache a bit so you don't hot-loop errors
     return json(
       res,
       200,
       { state: "none", videoId: null, upcomingStartMs: null, generatedAt, youtubeFetchedAt: null },
-      600
+      60
     );
   }
 };
